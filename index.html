@@ -1,0 +1,604 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>FaceOffice — The Ultimate Attendance UI</title>
+
+    <!-- Tailwind CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+
+    <!-- Framer Motion (for subtle animations) - using CDN for web animations -->
+    <script src="https://unpkg.com/framer-motion/dist/framer-motion.umd.js"></script>
+
+    <!-- React / ReactDOM / Babel (dev-friendly single-file) -->
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    <script src="https://unpkg.com/babel-standalone@6/babel.min.js"></script>
+
+    <style>
+      /* Small custom accents */
+      .glass { background: rgba(255,255,255,0.04); backdrop-filter: blur(6px); }
+      .card { border-radius: 12px; box-shadow: 0 10px 30px rgba(2,6,23,0.5); }
+      /* Animated pulse for live indicator */
+      .live-dot { width:10px; height:10px; border-radius:9999px; background:#10b981; box-shadow:0 0 6px rgba(16,185,129,0.9); animation: pulse 1.6s infinite; }
+      @keyframes pulse { 0% { transform: scale(0.9); opacity:0.8 } 50% { transform: scale(1.15); opacity:1 } 100% { transform: scale(0.9); opacity:0.8 } }
+      /* file preview */
+      .img-preview { max-height:220px; object-fit:cover; border-radius:8px; }
+      /* tiny toast styling override */
+      .toast { position: fixed; right: 20px; bottom: 20px; z-index: 60; }
+    </style>
+  </head>
+
+  <body class="bg-gradient-to-br from-slate-900 to-slate-800 text-slate-100 min-h-screen">
+    <div id="root"></div>
+
+    <script type="text/babel">
+    const { useState, useEffect, useRef } = React;
+
+    /* -------------------- Utilities -------------------- */
+    const fmt = (d) => {
+      if (!d) return "";
+      try {
+        const dt = new Date(d);
+        return dt.toLocaleString();
+      } catch (e) { return d; }
+    };
+
+    function Toast({toasts, remove}) {
+      return (
+        <div className="toast flex flex-col gap-2">
+          {toasts.map(t => (
+            <div key={t.id} className={`px-4 py-3 rounded-lg shadow-xl ${t.type==='error'?'bg-red-700':'bg-slate-800/80'}`}>
+              <div className="flex items-start gap-3">
+                <div className="text-sm">{t.msg}</div>
+                <div className="ml-auto text-xs opacity-70 cursor-pointer" onClick={()=>remove(t.id)}>Dismiss</div>
+              </div>
+            </div>
+          ))}
+        </div>
+      );
+    }
+
+    function useToasts() {
+      const [toasts, setToasts] = useState([]);
+      useEffect(()=> {
+        const handle = setInterval(()=> {
+          setToasts(prev => prev.filter(t => Date.now() - t.ts < (t.ttl||6000)));
+        }, 1500);
+        return ()=>clearInterval(handle);
+      }, []);
+      function push(msg, type='info', ttl=6000) {
+        const t = { id: Math.random().toString(36).slice(2,9), msg, type, ts: Date.now(), ttl };
+        setToasts(prev => [t, ...prev].slice(0,6));
+      }
+      function remove(id) { setToasts(prev => prev.filter(t => t.id !== id)); }
+      return { toasts, push, remove };
+    }
+
+    /* -------------------- API helpers -------------------- */
+    async function apiGET(path) {
+      const res = await fetch(path, { credentials: 'same-origin' });
+      if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+      const ct = res.headers.get('content-type') || '';
+      if (ct.includes('application/json')) return await res.json();
+      // fallback: return text
+      return await res.text();
+    }
+    async function apiPOST(path, body, opts={}) {
+      const res = await fetch(path, { method:'POST', body, credentials:'same-origin', ...opts });
+      if (!res.ok) {
+        let text = await res.text().catch(()=>null);
+        throw new Error(text || `${res.status} ${res.statusText}`);
+      }
+      const ct = res.headers.get('content-type') || '';
+      return ct.includes('application/json') ? await res.json() : await res.text();
+    }
+
+    /* -------------------- Layout & Nav -------------------- */
+    function Topbar({onNav, route}) {
+      return (
+        <header className="sticky top-0 z-40 glass p-4 border-b border-slate-800">
+          <div className="max-w-7xl mx-auto flex items-center justify-between gap-6">
+            <div className="flex items-center gap-4">
+              <div className="rounded-md bg-gradient-to-br from-indigo-600 to-indigo-500 px-3 py-2 text-xl font-extrabold">FaceOffice</div>
+              <div className="text-sm text-slate-300">AI-driven attendance • payroll export</div>
+            </div>
+            <nav className="flex items-center gap-3">
+              <NavButton active={route==='dashboard'} onClick={()=>onNav('dashboard')}>Dashboard</NavButton>
+              <NavButton active={route==='register'} onClick={()=>onNav('register')}>Register</NavButton>
+              <NavButton active={route==='users'} onClick={()=>onNav('users')}>Users</NavButton>
+              <NavButton active={route==='attendance'} onClick={()=>onNav('attendance')}>Attendance</NavButton>
+              <a href="/download_employees" className="px-3 py-2 rounded-md bg-emerald-600 hover:bg-emerald-500 text-sm">Download Employees</a>
+              <a href="/download_attendance" className="px-3 py-2 rounded-md bg-amber-600 hover:bg-amber-500 text-sm">Download Attendance</a>
+            </nav>
+          </div>
+        </header>
+      );
+    }
+
+    function NavButton({children, onClick, active}) {
+      return (
+        <button onClick={onClick} className={`px-3 py-2 rounded-md text-sm ${active ? 'bg-white/6 text-white' : 'hover:bg-white/3 text-slate-200'}`}>
+          {children}
+        </button>
+      );
+    }
+
+    /* -------------------- Dashboard -------------------- */
+    function Dashboard({pushToast}) {
+      const [attResult, setAttResult] = useState(null);
+      const [loading, setLoading] = useState(false);
+
+      async function markAttendance() {
+        setLoading(true);
+        setAttResult(null);
+        try {
+          // Try POST (app.py expects GET in earlier version but we implemented POST in SPA). Server handles either.
+          const result = await apiPOST('/mark_attendance', null).catch(async err=>{
+            // If server requires GET, try GET fallback
+            try { return await apiGET('/mark_attendance'); } catch(e){ throw err; }
+          });
+          setAttResult(result);
+          pushToast('Attendance processed', 'info');
+        } catch (e) {
+          pushToast('Attendance failed: '+e.message, 'error');
+        } finally { setLoading(false); }
+      }
+
+      return (
+        <main className="max-w-7xl mx-auto p-6 grid grid-cols-1 lg:grid-cols-3 gap-6">
+          <section className="lg:col-span-2 space-y-4">
+            <div className="card p-4 bg-gradient-to-br from-slate-800 to-slate-900">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h3 className="text-lg font-semibold">Live Camera</h3>
+                  <div className="text-sm text-slate-400">Streamed from server endpoint <code>/video_feed</code></div>
+                </div>
+                <div className="flex items-center gap-3">
+                  <div className="live-dot" title="Live"></div>
+                  <div className="text-sm text-slate-300">Live</div>
+                </div>
+              </div>
+
+              <div className="mt-4">
+                <div className="w-full rounded overflow-hidden">
+                  <img src="/video_feed" alt="Live feed" style={{width:'100%', maxHeight:520, objectFit:'cover'}} />
+                </div>
+              </div>
+            </div>
+
+            <div className="card p-4 bg-gradient-to-br from-slate-800 to-slate-900">
+              <div className="flex items-center justify-between">
+                <h3 className="text-lg font-semibold">Attendance Control</h3>
+                <div className="text-sm text-slate-400">Marks multiple faces seen in the frame</div>
+              </div>
+
+              <div className="mt-4 flex items-center gap-3">
+                <button onClick={markAttendance} disabled={loading}
+                  className="px-4 py-2 rounded bg-indigo-600 hover:bg-indigo-500 focus:outline-none focus:ring">
+                  {loading ? 'Processing...' : 'Mark Attendance (All Faces)'}
+                </button>
+
+                <a href="/download_attendance" className="px-3 py-2 rounded bg-amber-600 hover:bg-amber-500">Download Attendance</a>
+                <a href="/download_employees" className="px-3 py-2 rounded bg-emerald-600 hover:bg-emerald-500">Download Employees</a>
+              </div>
+
+              <div className="mt-4">
+                {attResult ? (
+                  <pre className="bg-slate-900 p-3 rounded overflow-auto text-xs">{JSON.stringify(attResult, null, 2)}</pre>
+                ) : (
+                  <div className="text-slate-400 text-sm">No recent attendance results. Click the button to mark attendance for recognized faces in the live frame.</div>
+                )}
+              </div>
+            </div>
+
+          </section>
+
+          <aside className="space-y-4">
+            <div className="card p-4 bg-gradient-to-br from-slate-800 to-slate-900">
+              <h4 className="font-semibold mb-2">Quick Actions</h4>
+              <div className="flex flex-col gap-2">
+                <a href="/register" className="px-3 py-2 rounded bg-sky-600 hover:bg-sky-500 text-center">Register Employee</a>
+                <a href="/users" className="px-3 py-2 rounded bg-indigo-600 hover:bg-indigo-500 text-center">Open Users (Server)</a>
+                <a href="/attendance" className="px-3 py-2 rounded bg-slate-700 hover:bg-slate-600 text-center">Open Attendance (Server)</a>
+              </div>
+              <div className="mt-3 text-sm text-slate-400">Pro tip: Use the Register panel to add salary & proxy. Exports are in Excel format.</div>
+            </div>
+
+            <div className="card p-4 bg-gradient-to-br from-slate-800 to-slate-900">
+              <h4 className="font-semibold mb-2">System Status</h4>
+              <InlineHealth />
+            </div>
+          </aside>
+        </main>
+      );
+    }
+
+    function InlineHealth() {
+      const [status, setStatus] = useState(null);
+      useEffect(()=> {
+        let mounted = true;
+        apiGET('/health').then(j => { if (mounted) setStatus(j); }).catch(()=> setStatus(null));
+        return ()=> mounted=false;
+      }, []);
+      return (
+        <div className="text-sm">
+          {status ? (
+            <div className="flex items-center gap-2">
+              <div className="w-2 h-2 rounded-full bg-green-400" />
+              <div>Server healthy — {new Date(status.timestamp).toLocaleString()}</div>
+            </div>
+          ) : (
+            <div className="text-amber-400">Server health unknown — try refreshing or check backend.</div>
+          )}
+        </div>
+      );
+    }
+
+    /* -------------------- Register -------------------- */
+    function Register({pushToast}) {
+      const [name, setName] = useState('');
+      const [email, setEmail] = useState('');
+      const [proxy, setProxy] = useState('');
+      const [salary, setSalary] = useState('');
+      const [file, setFile] = useState(null);
+      const [preview, setPreview] = useState(null);
+      const [loading, setLoading] = useState(false);
+
+      useEffect(()=> {
+        if (!file) { setPreview(null); return; }
+        const url = URL.createObjectURL(file);
+        setPreview(url);
+        return ()=> URL.revokeObjectURL(url);
+      }, [file]);
+
+      async function handleSubmit(e) {
+        e.preventDefault();
+        if (!file) { pushToast('Upload a face image', 'error'); return; }
+        const fd = new FormData();
+        fd.append('name', name);
+        if (email) fd.append('email', email);
+        if (proxy) fd.append('proxy', proxy);
+        if (salary) fd.append('salary', salary);
+        fd.append('image', file);
+
+        setLoading(true);
+        try {
+          const res = await fetch('/register', { method: 'POST', body: fd });
+          try {
+            const res = await fetch('/register', { method: 'POST', body: fd });
+            const data = await res.json();
+
+            if (data.status === "success") {
+            pushToast('Registered successfully', 'info');
+            // Clear form instead of forcing redirect
+            setName(''); setEmail(''); setProxy(''); setSalary('');
+            setFile(null);
+          } else {
+            pushToast('Registration error: ' + (data.message || 'Unknown'), 'error');
+          }
+        } catch (e) {
+          pushToast('Register failed: ' + e.message, 'error');
+        }
+
+        } catch (e) {
+          pushToast('Register failed: ' + e.message, 'error');
+        } finally { setLoading(false); }
+      }
+
+      return (
+        <div className="max-w-4xl mx-auto p-6">
+          <div className="card p-6 bg-gradient-to-br from-slate-800 to-slate-900">
+            <h2 className="text-2xl font-bold mb-4">Register New Employee</h2>
+           <form 
+              className="grid grid-cols-1 md:grid-cols-3 gap-4"
+          >
+
+
+              <div className="md:col-span-2 space-y-3">
+                <input required value={name} onChange={e=>setName(e.target.value)} placeholder="Full name" className="w-full p-3 rounded bg-slate-900" />
+                <input value={email} onChange={e=>setEmail(e.target.value)} placeholder="Email (optional)" className="w-full p-3 rounded bg-slate-900" />
+                <div className="flex gap-2">
+                  <input type="text" value={proxy} onChange={e=>setProxy(e.target.value)} placeholder="Proxy ID (optional)" className="w-1/2 p-3 rounded bg-slate-900" />
+                  <input type="text" value={salary} onChange={e=>setSalary(e.target.value)} placeholder="Salary (optional)" className="w-1/2 p-3 rounded bg-slate-900" />
+
+                </div>
+
+                <label className="block p-3 rounded bg-slate-900">
+                  <div className="text-sm text-slate-300 mb-2">Upload face image (clear single face recommended)</div>
+                  <input type="file" accept="image/*" onChange={e=>setFile(e.target.files[0])} />
+                </label>
+
+                <div className="flex gap-3 items-center">
+                  <button 
+                    type="button" 
+                    onClick={handleSubmit} 
+                    disabled={loading} 
+                    className="px-4 py-2 rounded bg-indigo-600 hover:bg-indigo-500"
+                  >
+                    {loading ? 'Uploading...' : 'Register'}
+                  </button>
+
+                  <a href="/" className="text-slate-400">Back to Dashboard</a>
+                </div>
+              </div>
+
+              <div className="md:col-span-1">
+                <div className="bg-slate-900 rounded p-3">
+                  <div className="text-sm text-slate-400 mb-2">Preview</div>
+                  {preview ? (
+                    <img src={preview} className="img-preview w-full" alt="preview" />
+                  ) : (
+                    <div className="h-48 w-full rounded bg-slate-800 flex items-center justify-center text-slate-500">No image selected</div>
+                  )}
+                </div>
+              </div>
+            </form>
+          </div>
+        </div>
+      );
+    }
+
+    /* -------------------- Users (SPA table) -------------------- */
+    function UsersPage({pushToast}) {
+      const [users, setUsers] = useState(null);
+      const [loading, setLoading] = useState(false);
+      const [q, setQ] = useState('');
+      const [page, setPage] = useState(1);
+      const perPage = 12;
+      const [sort, setSort] = useState({key:'user_id', dir:'asc'});
+      const [modalUser, setModalUser] = useState(null);
+
+      useEffect(()=> {
+        setLoading(true);
+        // Try to fetch JSON endpoint; fallback offered to server page if fail
+        apiGET('/api/users').then(json => {
+          setUsers(Array.isArray(json) ? json : []);
+        }).catch(async (e) => {
+          pushToast('API /api/users not available — falling back to server users page', 'error', 7000);
+          setUsers(null);
+        }).finally(()=>setLoading(false));
+      }, []);
+
+      const filtered = (users||[]).filter(u => {
+        if (!q) return true;
+        const s = q.toLowerCase();
+        return (String(u.user_id)+u.name+ (u.email||'') + (u.proxy||'')).toLowerCase().includes(s);
+      }).sort((a,b)=> {
+        const k = sort.key;
+        const d = sort.dir === 'asc' ? 1 : -1;
+        if (a[k] < b[k]) return -1 * d;
+        if (a[k] > b[k]) return 1 * d;
+        return 0;
+      });
+
+      const total = filtered.length;
+      const pages = Math.max(1, Math.ceil(total / perPage));
+      const slice = filtered.slice((page-1)*perPage, page*perPage);
+
+      function toggleSort(key) {
+        setSort(prev => prev.key === key ? {key, dir: prev.dir === 'asc' ? 'desc' : 'asc'} : {key, dir:'asc'});
+      }
+
+      return (
+        <div className="max-w-7xl mx-auto p-6">
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="text-2xl font-bold">Employees</h2>
+            <div className="flex gap-3">
+              <a href="/download_employees" className="px-3 py-2 rounded bg-emerald-600">Download Excel</a>
+              <a href="/users" className="px-3 py-2 rounded bg-slate-700">Open Server Users</a>
+            </div>
+          </div>
+
+          <div className="card p-4 mb-4 bg-gradient-to-br from-slate-800 to-slate-900">
+            <div className="flex items-center gap-3">
+              <input value={q} onChange={e=>{setQ(e.target.value); setPage(1);}} placeholder="Search by name, id, proxy, email..." className="p-2 rounded bg-slate-900 w-full" />
+              <div className="text-sm text-slate-400">{total} results</div>
+            </div>
+          </div>
+
+          {users === null ? (
+            <div className="card p-6 bg-slate-800">
+              <div className="text-slate-300">API endpoint not available. <a href="/users" className="text-emerald-400">Open server users page</a> to view list, or add the optional API to your Flask backend (see instructions below).</div>
+            </div>
+          ) : (
+            <div className="card overflow-hidden">
+              <table className="min-w-full table-auto">
+                <thead className="bg-slate-700">
+                  <tr>
+                    <th className="px-4 py-3 text-left cursor-pointer" onClick={()=>toggleSort('user_id')}>ID {sort.key==='user_id'? (sort.dir==='asc'?'▲':'▼') : ''}</th>
+                    <th className="px-4 py-3 text-left cursor-pointer" onClick={()=>toggleSort('name')}>Name {sort.key==='name'? (sort.dir==='asc'?'▲':'▼') : ''}</th>
+                    <th className="px-4 py-3 text-left">Email</th>
+                    <th className="px-4 py-3 text-left">Proxy</th>
+                    <th className="px-4 py-3 text-left">Salary</th>
+                    <th className="px-4 py-3 text-left">Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="bg-slate-800 divide-y divide-slate-700">
+                  {slice.map(u => (
+                    <tr key={u.user_id} className="hover:bg-slate-700/40">
+                      <td className="px-4 py-3">{u.user_id}</td>
+                      <td className="px-4 py-3">{u.name}</td>
+                      <td className="px-4 py-3 text-sm text-slate-300">{u.email||'—'}</td>
+                      <td className="px-4 py-3">{u.proxy||'—'}</td>
+                      <td className="px-4 py-3">{u.salary||'—'}</td>
+                      <td className="px-4 py-3">
+                        <button onClick={()=>setModalUser(u)} className="px-2 py-1 rounded bg-indigo-600 hover:bg-indigo-500 text-sm">Details</button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+
+              <div className="p-4 flex items-center justify-between">
+                <div className="text-sm text-slate-400">Page {page} / {pages}</div>
+                <div className="flex gap-2">
+                  <button onClick={()=>setPage(p=>Math.max(1,p-1))} className="px-3 py-1 rounded bg-slate-700">Prev</button>
+                  <button onClick={()=>setPage(p=>Math.min(pages,p+1))} className="px-3 py-1 rounded bg-slate-700">Next</button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* modal */}
+          {modalUser && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center">
+              <div className="absolute inset-0 bg-black/60" onClick={()=>setModalUser(null)} />
+              <div className="relative z-60 max-w-lg w-full p-6 card bg-slate-900">
+                <h3 className="text-xl font-bold mb-2">{modalUser.name}</h3>
+                <div className="text-sm text-slate-300 mb-4">User ID: {modalUser.user_id}</div>
+                <div className="space-y-2">
+                  <div><strong>Email:</strong> {modalUser.email || '—'}</div>
+                  <div><strong>Proxy:</strong> {modalUser.proxy || '—'}</div>
+                  <div><strong>Salary:</strong> {modalUser.salary || '—'}</div>
+                </div>
+                <div className="mt-4 flex justify-end gap-2">
+                  <button onClick={()=>setModalUser(null)} className="px-3 py-1 rounded bg-slate-700">Close</button>
+                </div>
+              </div>
+            </div>
+          )}
+
+        </div>
+      );
+    }
+
+    /* -------------------- Attendance SPA -------------------- */
+    function AttendancePage({pushToast}) {
+      const [records, setRecords] = useState(null);
+      const [filterType, setFilterType] = useState('single');
+      const [date, setDate] = useState('');
+      const [startDate, setStartDate] = useState('');
+      const [endDate, setEndDate] = useState('');
+      const [loading, setLoading] = useState(false);
+
+      async function load() {
+        setLoading(true);
+        // Prefer API endpoint; fallback to server page info
+        try {
+          const params = new URLSearchParams();
+          if (filterType==='single' && date) params.set('date', date);
+          if (filterType==='range' && startDate && endDate) { params.set('start_date', startDate); params.set('end_date', endDate); params.set('filter_type','range'); }
+          const url = '/api/attendance?' + params.toString();
+          const json = await apiGET(url);
+          if (Array.isArray(json)) setRecords(json);
+          else setRecords(null);
+        } catch (e) {
+          pushToast('API not available — open server attendance page for filters', 'error', 6000);
+          setRecords(null);
+        } finally { setLoading(false); }
+      }
+
+      return (
+        <div className="max-w-7xl mx-auto p-6">
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="text-2xl font-bold">Attendance</h2>
+            <div className="flex gap-2">
+              <a href="/download_attendance" className="px-3 py-2 rounded bg-amber-600">Download Excel</a>
+              <a href="/attendance" className="px-3 py-2 rounded bg-slate-700">Open Server Attendance</a>
+            </div>
+          </div>
+
+          <div className="card p-4 mb-4">
+            <div className="flex flex-wrap gap-3 items-end">
+              <div>
+                <label className="text-sm text-slate-300 block mb-1">Filter Type</label>
+                <select value={filterType} onChange={e=>setFilterType(e.target.value)} className="p-2 rounded bg-slate-900">
+                  <option value="single">Single Date</option>
+                  <option value="range">Range</option>
+                </select>
+              </div>
+
+              {filterType==='single' ? (
+                <div>
+                  <label className="text-sm text-slate-300 block mb-1">Date</label>
+                  <input type="date" value={date} onChange={e=>setDate(e.target.value)} className="p-2 rounded bg-slate-900" />
+                </div>
+              ) : (
+                <React.Fragment>
+                  <div>
+                    <label className="text-sm text-slate-300 block mb-1">Start</label>
+                    <input type="date" value={startDate} onChange={e=>setStartDate(e.target.value)} className="p-2 rounded bg-slate-900" />
+                  </div>
+                  <div>
+                    <label className="text-sm text-slate-300 block mb-1">End</label>
+                    <input type="date" value={endDate} onChange={e=>setEndDate(e.target.value)} className="p-2 rounded bg-slate-900" />
+                  </div>
+                </React.Fragment>
+              )}
+
+              <div>
+                <button onClick={load} className="px-4 py-2 rounded bg-indigo-600 hover:bg-indigo-500">Apply</button>
+              </div>
+            </div>
+          </div>
+
+          <div>
+            {records === null ? (
+              <div className="card p-6 bg-slate-800">Attendance API not available. <a href="/attendance" className="text-emerald-400">Open server attendance page</a> for filters and download.</div>
+            ) : (
+              <div className="card">
+                <table className="min-w-full">
+                  <thead className="bg-slate-700">
+                    <tr>
+                      <th className="px-4 py-2 text-left">Name</th>
+                      <th className="px-4 py-2 text-left">Timestamp</th>
+                      <th className="px-4 py-2 text-left">Formatted</th>
+                    </tr>
+                  </thead>
+                  <tbody className="bg-slate-800 divide-y divide-slate-700">
+                    {records.map(r => (
+                      <tr key={r.timestamp + r.name}>
+                        <td className="px-4 py-2">{r.name}</td>
+                        <td className="px-4 py-2">{r.timestamp}</td>
+                        <td className="px-4 py-2">{fmt(r.timestamp)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        </div>
+      );
+    }
+
+    /* -------------------- App -------------------- */
+    function App() {
+      const [route, setRoute] = useState('dashboard');
+      const toasts = useToasts();
+      const { toasts: list, push, remove } = toasts;
+
+      useEffect(()=> {
+        // Keyboard shortcuts
+        function onKey(e) {
+          if (e.key === '1') setRoute('dashboard');
+          if (e.key === '2') setRoute('register');
+          if (e.key === '3') setRoute('users');
+          if (e.key === '4') setRoute('attendance');
+        }
+        window.addEventListener('keydown', onKey);
+        return ()=>window.removeEventListener('keydown', onKey);
+      }, []);
+
+      return (
+        <React.Fragment>
+          <Topbar onNav={setRoute} route={route} />
+          {route === 'dashboard' && <Dashboard pushToast={push} />}
+          {route === 'register' && <Register pushToast={push} />}
+          {route === 'users' && <UsersPage pushToast={push} />}
+          {route === 'attendance' && <AttendancePage pushToast={push} />}
+
+          <footer className="mt-12 p-6 text-center text-slate-400">FaceOffice — next-level UI · Press 1/2/3/4 to switch pages</footer>
+
+          <Toast toasts={list} remove={remove} />
+        </React.Fragment>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+    </script>
+
+  </body>
+</html>
