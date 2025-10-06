@@ -20,7 +20,7 @@ def mark_attendance(user_id, name, write_to_excel=True):
     try:
         today = date.today()
         existing = db.get_attendance_report(today)  # assumes this returns rows with name in index 0 (based on your provided code)
-        present_today = any(record[0] == name for record in existing)
+        present_today = any(record[0] == user_id for record in existing)
 
         if not present_today:
             db.record_attendance(user_id)
