@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>FaceOffice — Register</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="/static/css/app.css">
+</head>
+<body class="bg-gradient-to-br from-slate-900 to-slate-800 text-slate-100 min-h-screen">
+  <header class="sticky top-0 z-40 glass p-4 border-b border-slate-800">
+    <div class="max-w-7xl mx-auto flex items-center justify-between gap-6">
+      <div class="flex items-center gap-4">
+        <div class="rounded-md bg-gradient-to-br from-indigo-600 to-indigo-500 px-3 py-2 text-xl font-extrabold">FaceOffice</div>
+        <div class="text-sm text-slate-300">Register employee</div>
+      </div>
+      <nav class="flex items-center gap-3">
+        <a href="/" data-nav="dashboard" class="px-3 py-2 rounded-md text-sm">Dashboard</a>
+        <a href="/register" data-nav="register" class="px-3 py-2 rounded-md text-sm">Register</a>
+        <a href="/users" data-nav="users" class="px-3 py-2 rounded-md text-sm">Users</a>
+        <a href="/attendance" data-nav="attendance" class="px-3 py-2 rounded-md text-sm">Attendance</a>
+      </nav>
+    </div>
+  </header>
+
+  <div class="max-w-4xl mx-auto p-6">
+    <div class="card p-6 bg-gradient-to-br from-slate-800 to-slate-900">
+      <h2 class="text-2xl font-bold mb-4">Register New Employee</h2>
+
+      <!-- No <form>; we submit via JS -->
+      <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <div class="md:col-span-2 space-y-3">
+          <input id="name" placeholder="Full name" class="w-full p-3 rounded bg-slate-900" required />
+          <input id="email" placeholder="Email (optional)" class="w-full p-3 rounded bg-slate-900" />
+          <div class="flex gap-2">
+            <input id="proxy" placeholder="Proxy ID (optional)" class="w-1/2 p-3 rounded bg-slate-900" />
+            <input id="salary" placeholder="Salary (optional)" class="w-1/2 p-3 rounded bg-slate-900" />
+          </div>
+
+          <label class="block p-3 rounded bg-slate-900">
+            <div class="text-sm text-slate-300 mb-2">Upload face image (clear single face recommended)</div>
+            <input id="image" type="file" accept="image/*"/>
+          </label>
+
+          <div class="flex gap-3 items-center">
+            <button id="btnRegister" class="px-4 py-2 rounded bg-indigo-600 hover:bg-indigo-500">Register</button>
+            <a href="/" class="text-slate-400">Back to Dashboard</a>
+          </div>
+        </div>
+
+        <div class="md:col-span-1">
+          <div class="bg-slate-900 rounded p-3">
+            <div class="text-sm text-slate-400 mb-2">Preview</div>
+            <img id="preview" class="img-preview w-full hidden" alt="preview"/>
+            <div id="noprev" class="h-48 w-full rounded bg-slate-800 flex items-center justify-center text-slate-500">No image selected</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script type="module">
+    import { setActiveNav, initShortcuts, pushToast } from "/static/js/common.js";
+    import { initRegister } from "/static/js/register.js";
+    setActiveNav('register');
+    initShortcuts({
+      '1': ()=> location.href='/',
+      '2': ()=> location.href='/register',
+      '3': ()=> location.href='/users',
+      '4': ()=> location.href='/attendance',
+    });
+    initRegister({ pushToast });
+  </script>
+</body>
+</html>

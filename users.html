@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>FaceOffice — Users</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="/static/css/app.css">
+</head>
+<body class="bg-gradient-to-br from-slate-900 to-slate-800 text-slate-100 min-h-screen">
+  <header class="sticky top-0 z-40 glass p-4 border-b border-slate-800">
+    <div class="max-w-7xl mx-auto flex items-center justify-between gap-6">
+      <div class="flex items-center gap-4">
+        <div class="rounded-md bg-gradient-to-br from-indigo-600 to-indigo-500 px-3 py-2 text-xl font-extrabold">FaceOffice</div>
+        <div class="text-sm text-slate-300">Employees</div>
+      </div>
+      <nav class="flex items-center gap-3">
+        <a href="/" data-nav="dashboard" class="px-3 py-2 rounded-md text-sm">Dashboard</a>
+        <a href="/register" data-nav="register" class="px-3 py-2 rounded-md text-sm">Register</a>
+        <a href="/users" data-nav="users" class="px-3 py-2 rounded-md text-sm">Users</a>
+        <a href="/attendance" data-nav="attendance" class="px-3 py-2 rounded-md text-sm">Attendance</a>
+        <a href="/download_employees" class="px-3 py-2 rounded-md bg-emerald-600 hover:bg-emerald-500 text-sm">Download Excel</a>
+      </nav>
+    </div>
+  </header>
+
+  <div class="max-w-7xl mx-auto p-6">
+    <div class="card p-4 mb-4 bg-gradient-to-br from-slate-800 to-slate-900">
+      <div class="flex items-center gap-3">
+        <input id="q" placeholder="Search by name, id, proxy, email..." class="p-2 rounded bg-slate-900 w-full"/>
+        <div id="count" class="text-sm text-slate-400">0 results</div>
+      </div>
+    </div>
+
+    <div id="tableWrap" class="card overflow-hidden"></div>
+
+    <div class="p-4 flex items-center justify-between">
+      <div id="pageInfo" class="text-sm text-slate-400"></div>
+      <div class="flex gap-2">
+        <button id="prev" class="px-3 py-1 rounded bg-slate-700">Prev</button>
+        <button id="next" class="px-3 py-1 rounded bg-slate-700">Next</button>
+      </div>
+    </div>
+  </div>
+
+  <script type="module">
+    import { setActiveNav, initShortcuts } from "/static/js/common.js";
+    import { initUsers } from "/static/js/users.js";
+    setActiveNav('users');
+    initShortcuts({
+      '1': ()=> location.href='/',
+      '2': ()=> location.href='/register',
+      '3': ()=> location.href='/users',
+      '4': ()=> location.href='/attendance',
+    });
+    initUsers();
+  </script>
+</body>
+</html>

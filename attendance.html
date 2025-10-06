@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>FaceOffice — Attendance</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="/static/css/app.css">
+</head>
+<body class="bg-gradient-to-br from-slate-900 to-slate-800 text-slate-100 min-h-screen">
+  <header class="sticky top-0 z-40 glass p-4 border-b border-slate-800">
+    <div class="max-w-7xl mx-auto flex items-center justify-between gap-6">
+      <div class="flex items-center gap-4">
+        <div class="rounded-md bg-gradient-to-br from-indigo-600 to-indigo-500 px-3 py-2 text-xl font-extrabold">FaceOffice</div>
+        <div class="text-sm text-slate-300">Attendance</div>
+      </div>
+      <nav class="flex items-center gap-3">
+        <a href="/" data-nav="dashboard" class="px-3 py-2 rounded-md text-sm">Dashboard</a>
+        <a href="/register" data-nav="register" class="px-3 py-2 rounded-md text-sm">Register</a>
+        <a href="/users" data-nav="users" class="px-3 py-2 rounded-md text-sm">Users</a>
+        <a href="/attendance" data-nav="attendance" class="px-3 py-2 rounded-md text-sm">Attendance</a>
+        <a href="/download_attendance" class="px-3 py-2 rounded-md bg-amber-600 hover:bg-amber-500 text-sm">Download Excel</a>
+      </nav>
+    </div>
+  </header>
+
+  <div class="max-w-7xl mx-auto p-6">
+    <div class="card p-4 mb-4">
+      <div class="flex flex-wrap gap-3 items-end">
+        <div>
+          <label class="text-sm text-slate-300 block mb-1">Filter Type</label>
+          <select id="filterType" class="p-2 rounded bg-slate-900">
+            <option value="single">Single Date</option>
+            <option value="range">Range</option>
+          </select>
+        </div>
+        <div id="singleWrap">
+          <label class="text-sm text-slate-300 block mb-1">Date</label>
+          <input id="singleDate" type="date" class="p-2 rounded bg-slate-900"/>
+        </div>
+        <div id="rangeWrap" class="hidden flex gap-3">
+          <div>
+            <label class="text-sm text-slate-300 block mb-1">Start</label>
+            <input id="startDate" type="date" class="p-2 rounded bg-slate-900"/>
+          </div>
+          <div>
+            <label class="text-sm text-slate-300 block mb-1">End</label>
+            <input id="endDate" type="date" class="p-2 rounded bg-slate-900"/>
+          </div>
+        </div>
+        <div>
+          <button id="apply" class="px-4 py-2 rounded bg-indigo-600 hover:bg-indigo-500">Apply</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="recordsWrap" class="card p-0 overflow-hidden">
+      <table class="min-w-full">
+        <thead class="bg-slate-700">
+          <tr>
+            <th class="px-4 py-2 text-left">Name</th>
+            <th class="px-4 py-2 text-left">Timestamp</th>
+            <th class="px-4 py-2 text-left">Formatted</th>
+          </tr>
+        </thead>
+        <tbody id="recordsBody" class="bg-slate-800 divide-y divide-slate-700"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <script type="module">
+    import { setActiveNav, initShortcuts, pushToast } from "/static/js/common.js";
+    import { initAttendance } from "/static/js/attendance.js";
+    setActiveNav('attendance');
+    initShortcuts({
+      '1': ()=> location.href='/',
+      '2': ()=> location.href='/register',
+      '3': ()=> location.href='/users',
+      '4': ()=> location.href='/attendance',
+    });
+    initAttendance({ pushToast });
+  </script>
+</body>
+</html>
