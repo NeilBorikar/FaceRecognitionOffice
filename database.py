@@ -41,6 +41,7 @@ class FaceDatabase:
             conn.execute(f"PRAGMA busy_timeout = {int(busy_timeout)};")
             conn.execute("PRAGMA foreign_keys = ON;")
             self._create_tables(conn)
+            self._migrate_schema(conn)
 
     def _get_conn(self) -> sqlite3.Connection:
         """
@@ -99,6 +100,36 @@ class FaceDatabase:
         cur.execute("CREATE INDEX IF NOT EXISTS idx_att_user_time ON attendance_records(user_id, timestamp);")
         conn.commit()
         cur.close()
+   
+
+    def _migrate_schema(self, conn: sqlite3.Connection):
+        """Add missing columns to users if DB was created with an older schema."""
+        cur = conn.cursor()
+        cur.execute("PRAGMA table_info(users);")
+        cols = {row["name"] for row in cur.fetchall()}
+
+        added = []
+
+        if "proxy" not in cols:
+            cur.execute("ALTER TABLE users ADD COLUMN proxy TEXT;")
+            added.append("proxy TEXT")
+        if "salary" not in cols:
+            cur.execute("ALTER TABLE users ADD COLUMN salary REAL;")
+            added.append("salary REAL")
+        if "department" not in cols:
+            cur.execute("ALTER TABLE users ADD COLUMN department TEXT;")
+            added.append("department TEXT")
+        if "created_at" not in cols:
+            cur.execute("ALTER TABLE users ADD COLUMN created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;")
+            added.append("created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
+
+        conn.commit()
+        cur.close()
+
+        if added:
+            logger.info(f"DB schema migrated: added columns -> {', '.join(added)}")
+        else:
+            logger.info("DB schema up-to-date; no columns added.")
 
     # ---------------------------
     # User management
