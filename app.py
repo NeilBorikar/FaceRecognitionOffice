@@ -1,4 +1,5 @@
 # app.py
+from unicodedata import name
 from flask import Flask, render_template, Response, jsonify, g, request, redirect, url_for, flash, send_file,send_from_directory
 import cv2
 import numpy as np
@@ -19,7 +20,7 @@ app = Flask(__name__)
 camera = cv2.VideoCapture(0)
 app.config.update({
     'VIDEO_SOURCE': 0,
-    'FACE_RECOGNITION_THRESHOLD': 0.6,
+    'FACE_TOLERANCE': 0.55,
     'CACHE_TIMEOUT_MINUTES': 5,
     'FRAME_SKIP_RATE': 2,  # Process every Nth frame
     'SECRET_KEY': 'your_secret_key_here'
@@ -41,6 +42,9 @@ last_cache_clear = datetime.now()
 # Ensure excel files exist
 excel_manager.init_excel_files()
 
+marked_today = set()
+last_marked_date = date.today()
+
 # Database connection helpers (reuse your FaceDatabase wrapper)
 def get_db():
     if 'db' not in g:
@@ -50,6 +54,8 @@ def get_db():
         except Exception as e:
             app.logger.error(f"Table creation failed: {str(e)}")
     return g.db
+
+
 
 @app.teardown_appcontext
 def close_db(e=None):
@@ -71,6 +77,8 @@ def clear_face_cache():
         last_cache_clear = now
         app.logger.info("Cleared face recognition cache")
 
+
+
 # Video feed generator (yields MJPEG)
 def generate_frames():
     global current_frame
@@ -85,6 +93,8 @@ def generate_frames():
     frame_counter = 0
     try:
         while True:
+            reset_marked_today_if_new_day()  # 🧹 Reset daily marked cache
+
             success, frame = cap.read()
             frame_counter += 1
             if not success:
@@ -110,26 +120,39 @@ def generate_frames():
 
                 # If there are known encodings, compare
                 if known_encodings:
+                    matches_to_mark = []
                     for (top, right, bottom, left), face_encoding in zip(face_locations, face_encodings):
                         # distances against DB
                         face_distances = face_recognition.face_distance(known_encodings, face_encoding)
                         if len(face_distances) == 0:
                             continue
                         best_idx = np.argmin(face_distances)
-                        confidence = 1 - face_distances[best_idx]
-                        if confidence > app.config['FACE_RECOGNITION_THRESHOLD']:
+                        best_distance = float(face_distances[best_idx])
+                        is_match = best_distance < app.config['FACE_TOLERANCE']
+                        name_to_show = "Unknown"
+                        color = (0, 0, 255)
+                        if is_match:
+                            # ✅ Recognized
+                            uid = user_ids[best_idx]
                             name = known_names[best_idx]
-                            # scale back to full frame
-                            top *= 4; right *= 4; bottom *= 4; left *= 4
-                            cv2.rectangle(frame, (left, top), (right, bottom), (0, 255, 0), 2)
-                            cv2.putText(frame, f"{name} ({confidence:.2f})", (left+6, bottom-6),
-                                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255,255,255), 1)
-                        else:
-                            # Unknown face box
-                            top *= 4; right *= 4; bottom *= 4; left *= 4
-                            cv2.rectangle(frame, (left, top), (right, bottom), (0, 0, 255), 1)
-                            cv2.putText(frame, "Unknown", (left+6, bottom-6),
-                                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255,255,255), 1)
+                            name_to_show = f"{name} ({1.0 - best_distance:.2f})"
+                            color = (0, 255, 0)
+
+                            # 🤖 Auto-mark attendance if not already marked
+                            if uid not in marked_today:
+                                matches_to_mark.append((uid, name))
+                                
+
+                        # scale back to full frame and draw
+                        top *= 4; right *= 4; bottom *= 4; left *= 4
+                        cv2.rectangle(frame, (left, top), (right, bottom), color, 2)
+                        cv2.putText(frame, name_to_show, (left+6, bottom-6),
+                                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255,255,255), 1)
+                    if matches_to_mark:
+                        app.logger.info(f"🤖 Auto marking attendance for {len(matches_to_mark)} face(s): {matches_to_mark}")
+                        mark_attendance_batch(matches_to_mark)
+                        for uid, _ in matches_to_mark:
+                            marked_today.add(uid)  
 
             # yield MJPEG frame
             ret, buffer = cv2.imencode('.jpg', frame)
@@ -143,7 +166,17 @@ def generate_frames():
             pass
         app.logger.info("Camera resource released")
 
+def reset_marked_today_if_new_day():
+    global marked_today, last_marked_date
+    today = date.today()
+    if today != last_marked_date:
+        marked_today.clear()
+        last_marked_date = today
+        app.logger.info("🧹 Cleared marked_today set for new day")
+
+
 # Routes
+# ⬇️ Replace your existing index() route
 @app.route('/')
 def index():
     return send_from_directory('static', 'index.html')
@@ -191,8 +224,8 @@ def mark_attendance_endpoint():
                 if len(distances) == 0:
                     continue
                 best_idx = np.argmin(distances)
-                confidence = 1 - distances[best_idx]
-                if confidence > app.config['FACE_RECOGNITION_THRESHOLD']:
+                best_distance = float(distances[best_idx])
+                if best_distance < app.config['FACE_TOLERANCE']:
                     uid = user_ids[best_idx]
                     name = known_names[best_idx]
                     if uid not in seen_user_ids:
@@ -225,11 +258,9 @@ def mark_attendance_endpoint():
         app.logger.error(f"Unexpected error: {str(e)}")
         return jsonify({"status":"error","message":"Internal server error"}), 500
 
+# ⬇️ Update register() to serve register.html on GET
 @app.route('/register', methods=['GET', 'POST'])
 def register():
-    """
-    Register endpoint extended to accept salary and proxy; still uses face_recognition to extract encoding.
-    """
     if request.method == 'POST':
         try:
             name = request.form['name']
@@ -243,20 +274,19 @@ def register():
             if image.filename == '':
                 return "No selected image", 400
 
-            # extract face encoding
+            # Extract face encoding
             img = face_recognition.load_image_file(image)
             encodings = face_recognition.face_encodings(img)
             if not encodings:
                 return "No face found in image", 400
 
-            # Save to DB
+            # Save to DB + Excel
             db = get_db()
             user_id = db.add_user(name, email, proxy=proxy, salary=salary)
             db.add_face_encoding(user_id, encodings[0])
-            # Also save to Excel for payroll/export convenience
             excel_manager.add_or_update_employee(user_id, name, email=email, proxy=proxy, salary=salary)
 
-            # clear cache so immediate recognition works
+            # Clear face cache for immediate recognition
             get_cached_known_faces.cache_clear()
 
             return jsonify({"status": "success", "user_id": user_id})
@@ -265,68 +295,18 @@ def register():
             app.logger.error(f"Registration failed: {e}")
             return f"Registration failed: {str(e)}", 500
 
-    return send_from_directory('static', 'index.html')
+    # ✅ Serve static register.html on GET
+    return send_from_directory('static', 'register.html')
 
+# ⬇️ New clean attendance page route
 @app.route('/attendance')
 def view_attendance():
-    try:
-        db = get_db()
-        filter_type = request.args.get('filter_type', 'single')
-        date_param = request.args.get('date')
-        start_date = request.args.get('start_date')
-        end_date = request.args.get('end_date')
+    return send_from_directory('static', 'attendance.html')
 
-        query = '''
-            SELECT u.name, a.timestamp 
-            FROM attendance_records a
-            JOIN users u ON a.user_id = u.user_id
-        '''
-        params = []
-
-        if filter_type == 'single' and date_param:
-            query += ' WHERE DATE(a.timestamp) = ?'
-            params.append(date_param)
-        elif filter_type == 'range' and start_date and end_date:
-            query += ' WHERE DATE(a.timestamp) BETWEEN ? AND ?'
-            params.extend([start_date, end_date])
-
-        query += ' ORDER BY a.timestamp DESC'
-
-        cursor = db.conn.cursor()
-        cursor.execute(query, params)
-        records = cursor.fetchall()
-
-        formatted_records = []
-        for name, timestamp in records:
-            dt = datetime.strptime(timestamp, '%Y-%m-%d %H:%M:%S') if isinstance(timestamp, str) else timestamp
-            formatted_records.append({
-                'name': name,
-                'timestamp': dt,
-                'formatted_time': dt.strftime('%Y-%m-%d %H:%M')
-            })
-
-        return send_from_directory('static', 'index.html')
-
-
-    except sqlite3.Error as e:
-        app.logger.error(f"Database error: {str(e)}")
-        flash('Database error occurred', 'danger')
-        return redirect(url_for('index'))
-    except Exception as e:
-        app.logger.error(f"Unexpected error: {str(e)}")
-        flash('An unexpected error occurred', 'danger')
-        return redirect(url_for('index'))
-
+# ⬇️ New clean users page route
 @app.route('/users')
 def view_users():
-    try:
-        db = get_db()
-        users = db.conn.execute('SELECT * FROM users').fetchall()
-        return send_from_directory('static', 'index.html')
-
-    except Exception as e:
-        logging.error(f"Failed to fetch users: {str(e)}")
-        return "Error loading user list", 500
+    return send_from_directory('static', 'users.html')
 
 @app.route('/download_employees')
 def download_employees():
@@ -349,55 +329,75 @@ def health_check():
     return jsonify({"status":"healthy", "timestamp": datetime.now().isoformat()})
 
 
+
 @app.route('/api/users')
 def api_users():
     try:
         db = get_db()
-        rows = db.conn.execute('SELECT user_id, name, email, proxy, salary, department, created_at FROM users ORDER BY user_id').fetchall()
+        rows = db.list_users()   # returns list of dicts directly
         users = []
-        for r in rows:
+        for u in rows:
             users.append({
-                "user_id": r[0],
-                "name": r[1],
-                "email": r[2],
-                "proxy": r[3],
-                "salary": r[4],
-                "department": r[5],
-                "created_at": r[6].isoformat() if hasattr(r[6], 'isoformat') else r[6]
+                "user_id": u.get("user_id"),
+                "name": u.get("name"),
+                "email": u.get("email"),
+                "proxy": u.get("proxy"),
+                "salary": u.get("salary")
             })
         return jsonify(users)
     except Exception as e:
         app.logger.error(f"API /api/users error: {e}")
         return jsonify([]), 500
 
+
+
 @app.route('/api/attendance')
 def api_attendance():
     try:
         filter_type = request.args.get('filter_type', 'single')
-        date = request.args.get('date')
+        selected_date = request.args.get('date')
         start_date = request.args.get('start_date')
         end_date = request.args.get('end_date')
 
-        cursor = get_db().conn.cursor()
-        query = '''
-            SELECT u.name, a.timestamp FROM attendance_records a
-            JOIN users u ON a.user_id = u.user_id
-        '''
-        params = []
-        if filter_type == 'single' and date:
-            query += ' WHERE DATE(a.timestamp) = ?'
-            params.append(date)
-        elif filter_type == 'range' and start_date and end_date:
-            query += ' WHERE DATE(a.timestamp) BETWEEN ? AND ?'
-            params.extend([start_date, end_date])
-        query += ' ORDER BY a.timestamp DESC'
-        cursor.execute(query, params)
-        rows = cursor.fetchall()
-        records = [{"name": r[0], "timestamp": (r[1].isoformat() if hasattr(r[1], 'isoformat') else str(r[1]))} for r in rows]
+        with get_db()._get_conn() as conn:
+            cursor = conn.cursor()
+            query = '''
+                SELECT u.name, a.timestamp 
+                FROM attendance_records a
+                JOIN users u ON a.user_id = u.user_id
+            '''
+            params = []
+
+            # 🟢 Single date filter
+            if filter_type == 'single' and selected_date:
+                query += ' WHERE substr(a.timestamp,1,10) = ?'
+                params.append(selected_date)
+
+            # 🟡 Range filter
+            elif filter_type == 'range' and start_date and end_date:
+                query += ' WHERE substr(a.timestamp,1,10) BETWEEN ? AND ?'
+                params.extend([start_date, end_date])
+
+            query += ' ORDER BY a.timestamp DESC'
+            app.logger.info(f"Final attendance query: {query} with {params}")
+            cursor.execute(query, params)
+            rows = cursor.fetchall()
+
+
+        records = [
+            {
+                "name": r[0],
+                "timestamp": (r[1].isoformat() if hasattr(r[1], 'isoformat') else str(r[1]))
+            }
+            for r in rows
+        ]
+
         return jsonify(records)
+
     except Exception as e:
-        app.logger.error(f"API /api/attendance error: {e}")
-        return jsonify([]), 500
+        app.logger.exception("API /api/attendance error")
+        return jsonify({"error": str(e)}), 500
+
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000, debug=True, threaded=True, use_reloader=False)
