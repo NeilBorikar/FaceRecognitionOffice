@@ -1,0 +1,7 @@
+/* Small custom accents to complement Tailwind */
+.glass { background: rgba(255,255,255,0.04); backdrop-filter: blur(6px); }
+.card { border-radius: 12px; box-shadow: 0 10px 30px rgba(2,6,23,0.5); }
+.live-dot { width:10px; height:10px; border-radius:9999px; background:#10b981; box-shadow:0 0 6px rgba(16,185,129,0.9); animation: pulse 1.6s infinite; }
+@keyframes pulse { 0% { transform: scale(0.9); opacity:0.8 } 50% { transform: scale(1.15); opacity:1 } 100% { transform: scale(0.9); opacity:0.8 } }
+.img-preview { max-height:220px; object-fit:cover; border-radius:8px; }
+.toast { position: fixed; right: 20px; bottom: 20px; z-index: 60; }
